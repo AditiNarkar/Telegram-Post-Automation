@@ -10,7 +10,7 @@ AI RSS feeds → topic rotation → AI writer → X Telegram bot
 
 The X draft is short, playful, and gently sarcastic about the technology. The LinkedIn draft is natural, professional, and human. Both link to the original source. You review, edit, and publish them manually.
 
-OpenAI is used first for draft generation. If its request fails—for example because credits are exhausted—the service automatically tries Groq. If neither provider is configured or both fail, it sends a simple template draft so the daily Telegram delivery still arrives. Groq is OpenAI-compatible through its `https://api.groq.com/openai/v1` endpoint. [Groq documentation](https://console.groq.com/docs/openai)
+OpenAI is the primary draft provider. If it fails, including due to an API limit, rate limit, or invalid key, the service tries Groq when `GROQ_API_KEY` is configured. The Groq path uses its Chat Completions structured-output endpoint with a strict JSON schema. If Groq also fails, Tavily Search is tried when `TAVILY_API_KEY` is configured. Tavily generates each draft from current search results in two separate requests. If every configured provider fails, Telegram receives a `DRAFT REQUEST FAILED` message containing the provider failure details. No template draft is ever generated. [Groq documentation](https://console.groq.com/docs/openai) and [Tavily Search documentation](https://docs.tavily.com/documentation/api-reference/endpoint/search)
 
 ## Setup
 
@@ -18,18 +18,30 @@ OpenAI is used first for draft generation. If its request fails—for example be
 2. Open a private chat with the bot, press **Start**, and send it a message.
 3. Find its chat ID by opening `https://api.telegram.org/bot<BOT_TOKEN>/getUpdates` in your browser after sending the bot a message. Copy `message.chat.id`.
 4. Copy the template and fill in all values: `cp .env.example .env`.
-   Add `GROQ_API_KEY` to enable the automatic fallback; it is optional if you only want OpenAI.
+   Add `GROQ_API_KEY` and `TAVILY_API_KEY` to enable both fallback providers.
 5. Install and run: `npm install && npm run dev`.
 
 Existing `TELEGRAM_LINKEDIN_BOT_TOKEN` and `TELEGRAM_LINKEDIN_CHAT_ID` environment values may remain in your deployment; they are now ignored.
 
-The service generates drafts once a day at `SCHEDULE_CRON` in `TIMEZONE`. During a running deployment, each successfully delivered source URL is remembered and the next request selects another unseen article from the past 30 days. Since there is no database, that rotation resets whenever Render restarts or redeploys the service.
+The service generates drafts once a day at `SCHEDULE_CRON` in `TIMEZONE`. During a running deployment, each successfully delivered source URL is remembered and the next request selects another unseen article from the past 30 days. It also chooses randomly from the latest eligible set, so a Render restart does not force the same newest item again. Since there is no database, exact long term history is intentionally not retained.
+
+## Daily automatic trigger on Render
+
+Render web services may sleep on some plans, so an in process cron alone is not dependable. The included [GitHub Actions scheduler](/Users/bigfatrat/Desktop/Projects/PostAutomation/.github/workflows/daily-drafts.yml) calls the protected Render endpoint at 9:05 AM Melbourne time every day, including across daylight saving changes. It runs at both possible UTC hours but the app sends only during `DAILY_DRAFT_HOUR`.
+
+Add these GitHub Actions secrets to the repository:
+
+- `CRON_SECRET`: the same secret configured in Render
+
+Keep `SCHEDULE_CRON="0 9 * * *"`, `TIMEZONE="Australia/Melbourne"`, and `DAILY_DRAFT_HOUR=9` in Render. The local cron remains a backup if the service is awake; the scheduler prevents it from sending twice in one running instance.
 
 ## Trigger drafts with `/start`
 
 Sending `/start` to the X bot triggers a draft run and returns both drafts as separate messages in the same chat. This requires a public HTTPS deployment because Telegram delivers commands through webhooks.
 
 Send `/time` to the same bot to receive the next scheduled draft time in your configured `TIMEZONE`.
+
+Send `/active` to confirm that the instance receiving the command is online and listening. The reply includes its hostname, process ID, uptime, and next scheduled draft time.
 
 1. Deploy the service behind HTTPS at a public domain, for example `https://drafts.example.com`.
 2. Set a long random `TELEGRAM_WEBHOOK_SECRET` in `.env` (letters, numbers, `_`, and `-` only).
